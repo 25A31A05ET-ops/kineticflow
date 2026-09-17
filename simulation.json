@@ -1,14 +1,245 @@
-{
-  "name": "vite-starter",
-  "private": true,
-  "version": "0.0.0",
-  "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
-  },
-  "devDependencies": {
-    "vite": "^5.4.2"
+// ============================================================
+// KineticFlow — Live Simulation Module
+// Handles: vehicle movement, energy particles, counter animation
+// ============================================================
+
+const ENERGY_PER_VEHICLE = 0.12 // Wh — illustrative, not measured
+
+export function initSimulation() {
+  const canvas = document.getElementById('kfSimCanvas')
+  const vehicle = document.getElementById('kfVehicle')
+  const recoveryZone = document.getElementById('kfRecoveryZone')
+  const storageIcon = document.getElementById('kfSimStorageIcon')
+  const useIcon = document.getElementById('kfSimUseIcon')
+  const statCount = document.getElementById('kfStatCount')
+  const statEnergy = document.getElementById('kfStatEnergy')
+  const statStatus = document.getElementById('kfStatStatus')
+  const btnOne = document.getElementById('kfSimOne')
+  const btnTen = document.getElementById('kfSimTen')
+  const btnReset = document.getElementById('kfSimReset')
+
+  let vehicleCount = 0
+  let totalEnergy = 0
+  let isAnimating = false
+  let queue = 0
+
+  // ---------- Helpers ----------
+  function setStatus(text, color) {
+    statStatus.textContent = text
+    statStatus.style.color = color || 'var(--kf-text-3)'
   }
+
+  function animateCounter(element, from, to, suffix, duration) {
+    const start = performance.now()
+    const step = (now) => {
+      const elapsed = now - start
+      const progress = Math.min(elapsed / duration, 1)
+      const eased = 1 - Math.pow(1 - progress, 3)
+      const value = from + (to - from) * eased
+      element.textContent = value.toFixed(2) + suffix
+      if (progress < 1) {
+        requestAnimationFrame(step)
+      } else {
+        element.textContent = to.toFixed(2) + suffix
+      }
+    }
+    requestAnimationFrame(step)
+  }
+
+  function bumpElement(el) {
+    el.classList.remove('kf-count-bump')
+    void el.offsetWidth
+    el.classList.add('kf-count-bump')
+  }
+
+  // ---------- Energy particle effects ----------
+  function spawnEnergyParticles() {
+    const canvasRect = canvas.getBoundingClientRect()
+    const zoneRect = recoveryZone.getBoundingClientRect()
+    const storageRect = storageIcon.getBoundingClientRect()
+
+    // Source: center of recovery zone
+    const startX = zoneRect.left - canvasRect.left + zoneRect.width / 2
+    const startY = zoneRect.top - canvasRect.top + zoneRect.height / 2
+
+    // Target: storage icon
+    const targetX = storageRect.left - canvasRect.left + storageRect.width / 2
+    const targetY = storageRect.top - canvasRect.top + storageRect.height / 2
+
+    for (let i = 0; i < 6; i++) {
+      setTimeout(() => {
+        createParticle(startX, startY, targetX, targetY, 'storage')
+      }, i * 80)
+    }
+  }
+
+  function spawnStorageToUseParticles() {
+    const canvasRect = canvas.getBoundingClientRect()
+    const storageRect = storageIcon.getBoundingClientRect()
+    const useRect = useIcon.getBoundingClientRect()
+
+    const startX = storageRect.left - canvasRect.left + storageRect.width / 2
+    const startY = storageRect.top - canvasRect.top + storageRect.height / 2
+    const targetX = useRect.left - canvasRect.left + useRect.width / 2
+    const targetY = useRect.top - canvasRect.top + useRect.height / 2
+
+    for (let i = 0; i < 4; i++) {
+      setTimeout(() => {
+        createParticle(startX, startY, targetX, targetY, 'use')
+      }, i * 100)
+    }
+  }
+
+  function createParticle(startX, startY, targetX, targetY, type) {
+    const particle = document.createElement('div')
+    particle.className = 'kf-energy-particle'
+
+    if (type === 'use') {
+      particle.style.background = 'var(--kf-accent)'
+      particle.style.boxShadow = '0 0 12px var(--kf-accent)'
+    }
+
+    particle.style.left = startX + 'px'
+    particle.style.top = startY + 'px'
+    canvas.appendChild(particle)
+
+    const dx = targetX - startX
+    const dy = targetY - startY
+    const duration = 700
+    const startTime = performance.now()
+
+    function animate(now) {
+      const elapsed = now - startTime
+      const progress = Math.min(elapsed / duration, 1)
+      const eased = progress * progress * (3 - 2 * progress) // smoothstep
+
+      particle.style.left = (startX + dx * eased) + 'px'
+      particle.style.top = (startY + dy * eased) + 'px'
+      particle.style.opacity = String(1 - progress * 0.8)
+      particle.style.transform = `scale(${1 - progress * 0.4})`
+
+      if (progress < 1) {
+        requestAnimationFrame(animate)
+      } else {
+        particle.remove()
+      }
+    }
+    requestAnimationFrame(animate)
+  }
+
+  // ---------- Vehicle animation ----------
+  function runSingleVehicle() {
+    if (isAnimating) {
+      queue++
+      return
+    }
+    isAnimating = true
+    setStatus('Vehicle approaching...', 'var(--kf-primary)')
+
+    // Reset vehicle to start
+    vehicle.style.transition = 'none'
+    vehicle.style.left = '-80px'
+    void vehicle.offsetWidth
+
+    // Animate vehicle across the canvas
+    const canvasWidth = canvas.getBoundingClientRect().width
+    const endX = canvasWidth + 80
+
+    requestAnimationFrame(() => {
+      vehicle.style.transition = 'left 1.8s cubic-bezier(0.4, 0, 0.2, 1)'
+      vehicle.style.left = endX + 'px'
+    })
+
+    // Vehicle enters recovery zone — trigger energy recovery
+    const zoneEnterDelay = 600
+    setTimeout(() => {
+      recoveryZone.classList.add('active')
+      setStatus('Recovering energy...', 'var(--kf-secondary)')
+      spawnEnergyParticles()
+      storageIcon.classList.add('charging')
+    }, zoneEnterDelay)
+
+    // Vehicle exits recovery zone
+    setTimeout(() => {
+      recoveryZone.classList.remove('active')
+    }, zoneEnterDelay + 700)
+
+    // Update counters
+    setTimeout(() => {
+      vehicleCount++
+      totalEnergy += ENERGY_PER_VEHICLE
+
+      statCount.textContent = vehicleCount
+      bumpElement(statCount)
+
+      animateCounter(statEnergy, totalEnergy - ENERGY_PER_VEHICLE, totalEnergy, ' Wh', 500)
+      bumpElement(statEnergy)
+
+      setStatus('Energy stored', 'var(--kf-accent)')
+      storageIcon.classList.remove('charging')
+
+      // Flow from storage to local use
+      spawnStorageToUseParticles()
+      useIcon.classList.add('powered')
+
+      setTimeout(() => {
+        useIcon.classList.remove('powered')
+        setStatus('Idle', 'var(--kf-text-3)')
+        isAnimating = false
+
+        if (queue > 0) {
+          queue--
+          runSingleVehicle()
+        }
+      }, 600)
+    }, zoneEnterDelay + 700)
+  }
+
+  function runTenVehicles() {
+    if (isAnimating) {
+      queue += 10
+      return
+    }
+    let remaining = 10
+
+    const runNext = () => {
+      if (remaining <= 0) return
+      runSingleVehicle()
+
+      // Wait for each vehicle to finish, then launch the next
+      const checkInterval = setInterval(() => {
+        if (!isAnimating) {
+          clearInterval(checkInterval)
+          remaining--
+          if (remaining > 0) {
+            runNext()
+          }
+        }
+      }, 50)
+    }
+
+    runNext()
+  }
+
+  function reset() {
+    queue = 0
+    isAnimating = false
+    vehicleCount = 0
+    totalEnergy = 0
+    statCount.textContent = '0'
+    statEnergy.textContent = '0.00 Wh'
+    setStatus('Idle', 'var(--kf-text-3)')
+    recoveryZone.classList.remove('active')
+    storageIcon.classList.remove('charging')
+    useIcon.classList.remove('powered')
+    vehicle.style.transition = 'none'
+    vehicle.style.left = '-80px'
+    // Clean up any lingering particles
+    canvas.querySelectorAll('.kf-energy-particle').forEach((p) => p.remove())
+  }
+
+  // ---------- Event listeners ----------
+  btnOne.addEventListener('click', runSingleVehicle)
+  btnTen.addEventListener('click', runTenVehicles)
+  btnReset.addEventListener('click', reset)
 }
